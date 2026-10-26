@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "energy-loader"
+version = "0.1.0"
+description = "Chargement du data lake (data/raw) vers les bases de la plateforme énergie"
+requires-python = ">=3.11"
+# Un pilote (driver) par base. Chaque base parle son propre protocole : on ne
+# peut pas toutes les atteindre avec une seule bibliothèque.
+dependencies = [
+    "pandas>=2.2",
+    "openpyxl>=3.1",                # lecture du fichier facturation.xlsx
+    "psycopg[binary]>=3.1",         # PostgreSQL
+    "PyMySQL>=1.1",                 # MySQL
+    "cassandra-driver>=3.29",       # Cassandra
+    "pymongo>=4.6",                 # MongoDB
+    "neo4j>=5.14",                  # Neo4j (protocole Bolt)
+    "redis>=5.0",                   # Redis
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+load-all = "loader.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
