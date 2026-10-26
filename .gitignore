@@ -1,0 +1,29 @@
+# --- Secrets : ne JAMAIS versionner ---
+.env
+
+# --- Données générées (reproductibles via le générateur) ---
+data/raw/*
+data/processed/*
+!data/**/.gitkeep
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Airflow (fichiers d'exécution) ---
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# --- ML : modèles entraînés (trop lourds pour Git) ---
+ml/models/*.pkl
+ml/models/*.joblib
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
