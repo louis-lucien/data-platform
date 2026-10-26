@@ -1,0 +1,425 @@
+<title>Tableau de bord Énergie</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  :root {
+    --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2de;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8984;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+    --grid: #ebeae6;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #333330;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+      --grid: #2a2a28;
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #333330;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --grid: #2a2a28;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding-block: 24px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: var(--surface-0);
+    color: var(--text-primary); font-family: var(--font); line-height: 1.5;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  header h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  header p { color: var(--text-secondary); margin: 0 0 24px; font-size: 0.9rem; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .kpi { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .kpi .val { font-size: 1.7rem; font-weight: 650; letter-spacing: -0.02em; }
+  .kpi .lbl { color: var(--text-secondary); font-size: 0.8rem; margin-top: 2px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 1.05rem; margin: 0 0 2px; }
+  .card .sub { color: var(--text-secondary); font-size: 0.82rem; margin: 0 0 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .bar-label { fill: var(--text-secondary); font-size: 11px; }
+  .bar-val { fill: var(--text-primary); font-size: 11px; font-weight: 600; }
+  .axis { stroke: var(--grid); stroke-width: 1; }
+  .axis-txt { fill: var(--text-muted); font-size: 10px; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 0.82rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 0.82rem; }
+  th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .note { color: var(--text-muted); font-size: 0.78rem; margin-top: 28px; }
+  .tip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1);
+         padding: 5px 9px; border-radius: 6px; font-size: 0.78rem; opacity: 0; transition: opacity .1s; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Tableau de bord — Distribution d'électricité</h1>
+    <p>Compteurs intelligents · données du data lake (60 jours d'historique). Démonstration BI : les mêmes agrégats sont servis par les vues SQL du Data Warehouse pour Power BI.</p>
+  </header>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Consommation totale par région</h2>
+    <p class="sub">Somme des kWh sur la période, les 14 régions du Sénégal. Dakar domine (population la plus dense).</p>
+    <div id="chart-region"></div>
+    <details><summary>Voir les données</summary><div id="table-region"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Profil de consommation horaire moyen</h2>
+    <p class="sub">kWh moyen par heure et par type de client. Les ménages pointent le soir ; les professionnels et agricoles, en journée.</p>
+    <div class="legend" id="legend-profil"></div>
+    <div id="chart-profil"></div>
+    <details><summary>Voir les données</summary><div id="table-profil"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Qualité des données clients par région</h2>
+    <p class="sub">Part de clients avec un email présent (indicateur suivi par l'ETL). Toutes les régions au-dessus de 90 %.</p>
+    <div id="chart-qualite"></div>
+    <details><summary>Voir les données</summary><div id="table-qualite"></div></details>
+  </section>
+
+  <p class="note">Source : data lake généré (1 000 compteurs, graine fixe). Graphiques recalculables depuis le Data Warehouse via <code>bi/sql/vues_bi.sql</code>.</p>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const DATA = {
+  "profil_horaire": {
+    "heures": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "residentiel": [
+      0.131,
+      0.104,
+      0.103,
+      0.102,
+      0.101,
+      0.126,
+      0.202,
+      0.252,
+      0.206,
+      0.188,
+      0.196,
+      0.231,
+      0.266,
+      0.27,
+      0.241,
+      0.24,
+      0.266,
+      0.319,
+      0.43,
+      0.525,
+      0.539,
+      0.479,
+      0.343,
+      0.209
+    ],
+    "professionnel": [
+      0.591,
+      0.586,
+      0.582,
+      0.577,
+      0.573,
+      0.573,
+      0.573,
+      1.137,
+      2.5,
+      3.135,
+      3.44,
+      3.513,
+      3.201,
+      3.225,
+      3.647,
+      3.631,
+      3.404,
+      2.962,
+      2.109,
+      1.237,
+      0.814,
+      0.805,
+      0.794,
+      0.789
+    ],
+    "agricole": [
+      0.119,
+      0.118,
+      0.119,
+      0.119,
+      0.118,
+      0.118,
+      0.588,
+      1.65,
+      2.155,
+      2.395,
+      2.433,
+      2.335,
+      1.989,
+      1.993,
+      2.371,
+      2.497,
+      2.246,
+      1.477,
+      0.491,
+      0.121,
+      0.121,
+      0.12,
+      0.12,
+      0.119
+    ]
+  },
+  "conso_region": [
+    {
+      "nom": "Dakar",
+      "energie_kwh": 127126.0
+    },
+    {
+      "nom": "Diourbel",
+      "energie_kwh": 106580.0
+    },
+    {
+      "nom": "Thiès",
+      "energie_kwh": 65529.0
+    },
+    {
+      "nom": "Louga",
+      "energie_kwh": 53200.0
+    },
+    {
+      "nom": "Saint-Louis",
+      "energie_kwh": 44794.0
+    },
+    {
+      "nom": "Kaolack",
+      "energie_kwh": 44435.0
+    },
+    {
+      "nom": "Fatick",
+      "energie_kwh": 41104.0
+    },
+    {
+      "nom": "Kolda",
+      "energie_kwh": 40252.0
+    },
+    {
+      "nom": "Matam",
+      "energie_kwh": 35788.0
+    },
+    {
+      "nom": "Tambacounda",
+      "energie_kwh": 33776.0
+    },
+    {
+      "nom": "Ziguinchor",
+      "energie_kwh": 28411.0
+    },
+    {
+      "nom": "Kaffrine",
+      "energie_kwh": 22420.0
+    },
+    {
+      "nom": "Sédhiou",
+      "energie_kwh": 21632.0
+    },
+    {
+      "nom": "Kédougou",
+      "energie_kwh": 11558.0
+    }
+  ],
+  "conso_type": [
+    {
+      "type_client": "agricole",
+      "energie_kwh": 1348.49
+    },
+    {
+      "type_client": "professionnel",
+      "energie_kwh": 4839.44
+    },
+    {
+      "type_client": "residentiel",
+      "energie_kwh": 5088.85
+    }
+  ],
+  "qualite": [
+    {
+      "nom": "Kolda",
+      "pct": 90.0
+    },
+    {
+      "nom": "Fatick",
+      "pct": 90.7
+    },
+    {
+      "nom": "Kaffrine",
+      "pct": 90.7
+    },
+    {
+      "nom": "Louga",
+      "pct": 90.8
+    },
+    {
+      "nom": "Ziguinchor",
+      "pct": 92.7
+    },
+    {
+      "nom": "Dakar",
+      "pct": 94.4
+    },
+    {
+      "nom": "Diourbel",
+      "pct": 95.6
+    },
+    {
+      "nom": "Tambacounda",
+      "pct": 96.2
+    },
+    {
+      "nom": "Thiès",
+      "pct": 96.2
+    },
+    {
+      "nom": "Sédhiou",
+      "pct": 97.2
+    },
+    {
+      "nom": "Matam",
+      "pct": 97.7
+    },
+    {
+      "nom": "Saint-Louis",
+      "pct": 98.5
+    },
+    {
+      "nom": "Kaolack",
+      "pct": 100.0
+    },
+    {
+      "nom": "Kédougou",
+      "pct": 100.0
+    }
+  ],
+  "kpis": {
+    "compteurs": 1000,
+    "regions": 14,
+    "kwh_total": 676606,
+    "releves": 1440000
+  }
+};
+const C = { residentiel: "var(--series-1)", professionnel: "var(--series-2)", agricole: "var(--series-3)" };
+const tip = document.getElementById("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.style.opacity = 1; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY - 10) + "px"; }
+function hideTip() { tip.style.opacity = 0; }
+const fmt = n => n.toLocaleString("fr-FR");
+
+// --- KPIs ---
+const k = DATA.kpis;
+document.getElementById("kpis").innerHTML = [
+  [fmt(k.compteurs), "compteurs"],
+  [fmt(k.regions), "régions"],
+  [fmt(k.kwh_total) + " kWh", "consommation totale"],
+  [fmt(k.releves), "relevés horaires"],
+].map(([v, l]) => `<div class="kpi"><div class="val">${v}</div><div class="lbl">${l}</div></div>`).join("");
+
+// --- Barres horizontales : conso par région ---
+(function () {
+  const d = DATA.conso_region, max = Math.max(...d.map(r => r.energie_kwh));
+  const rowH = 26, padL = 92, padR = 60, W = 900, H = d.length * rowH + 10;
+  const bars = d.map((r, i) => {
+    const w = (W - padL - padR) * r.energie_kwh / max, y = i * rowH + 6;
+    return `<text class="bar-label" x="${padL - 8}" y="${y + 13}" text-anchor="end">${r.nom}</text>
+      <rect x="${padL}" y="${y}" width="${w}" height="15" rx="4" fill="var(--series-1)"
+        onmousemove="showTip(event,'${r.nom} : <b>${fmt(r.energie_kwh)}</b> kWh')" onmouseleave="hideTip()"/>
+      <text class="bar-val" x="${padL + w + 6}" y="${y + 13}">${fmt(r.energie_kwh)}</text>`;
+  }).join("");
+  document.getElementById("chart-region").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Consommation par région">${bars}</svg>`;
+  document.getElementById("table-region").innerHTML = tableHTML(["Région", "kWh total"], d.map(r => [r.nom, fmt(r.energie_kwh)]));
+})();
+
+// --- Lignes : profil horaire par type ---
+(function () {
+  const p = DATA.profil_horaire, types = ["residentiel", "professionnel", "agricole"];
+  const W = 900, H = 320, padL = 44, padR = 16, padT = 12, padB = 28;
+  const allY = types.flatMap(t => p[t]), maxY = Math.max(...allY);
+  const x = h => padL + (W - padL - padR) * h / 23;
+  const y = v => padT + (H - padT - padB) * (1 - v / maxY);
+  // grille + axes Y
+  let g = "";
+  for (let i = 0; i <= 4; i++) { const v = maxY * i / 4, yy = y(v);
+    g += `<line class="gridline" x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}"/>
+          <text class="axis-txt" x="${padL - 6}" y="${yy + 3}" text-anchor="end">${v.toFixed(1)}</text>`; }
+  // axe X (heures)
+  for (let h = 0; h <= 23; h += 3) g += `<text class="axis-txt" x="${x(h)}" y="${H - 8}" text-anchor="middle">${h}h</text>`;
+  // lignes
+  const lines = types.map(t => {
+    const pts = p[t].map((v, h) => `${x(h)},${y(v)}`).join(" ");
+    const last = p[t].length - 1;
+    return `<polyline points="${pts}" fill="none" stroke="${C[t]}" stroke-width="2"/>
+      <circle cx="${x(last)}" cy="${y(p[t][last])}" r="3" fill="${C[t]}"/>
+      <text x="${x(last) + 6}" y="${y(p[t][last]) + 3}" style="fill:${C[t]};font-size:11px;font-weight:600">${t[0].toUpperCase()}</text>`;
+  }).join("");
+  // points de survol
+  const hov = types.flatMap(t => p[t].map((v, h) =>
+    `<circle cx="${x(h)}" cy="${y(v)}" r="8" fill="transparent"
+      onmousemove="showTip(event,'${t}, ${h}h : <b>${v}</b> kWh')" onmouseleave="hideTip()"/>`)).join("");
+  document.getElementById("chart-profil").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Profil horaire">${g}${lines}${hov}</svg>`;
+  document.getElementById("legend-profil").innerHTML = types.map(t =>
+    `<span><i style="background:${C[t]}"></i>${t}</span>`).join("");
+  const rows = p.heures.map(h => [h + "h", p.residentiel[h], p.professionnel[h], p.agricole[h]]);
+  document.getElementById("table-profil").innerHTML = tableHTML(["Heure", "Résidentiel", "Professionnel", "Agricole"], rows);
+})();
+
+// --- Barres : qualité email par région ---
+(function () {
+  const d = DATA.qualite, rowH = 24, padL = 92, padR = 44, W = 900, H = d.length * rowH + 10;
+  const bars = d.map((r, i) => {
+    const w = (W - padL - padR) * r.pct / 100, yy = i * rowH + 6;
+    return `<text class="bar-label" x="${padL - 8}" y="${yy + 12}" text-anchor="end">${r.nom}</text>
+      <rect x="${padL}" y="${yy}" width="${w}" height="14" rx="4" fill="var(--series-3)"
+        onmousemove="showTip(event,'${r.nom} : <b>${r.pct}%</b> emails valides')" onmouseleave="hideTip()"/>
+      <text class="bar-val" x="${padL + w + 6}" y="${yy + 12}">${r.pct}%</text>`;
+  }).join("");
+  document.getElementById("chart-qualite").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Qualité email par région">${bars}</svg>`;
+  document.getElementById("table-qualite").innerHTML = tableHTML(["Région", "% email valide"], d.map(r => [r.nom, r.pct + "%"]));
+})();
+
+function tableHTML(cols, rows) {
+  const head = "<tr>" + cols.map((c, i) => `<th class="${i ? 'num' : ''}">${c}</th>`).join("") + "</tr>";
+  const body = rows.map(r => "<tr>" + r.map((v, i) => `<td class="${i ? 'num' : ''}">${v}</td>`).join("") + "</tr>").join("");
+  return `<table>${head}${body}</table>`;
+}
+</script>
