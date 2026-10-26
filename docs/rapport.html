@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Plateforme de données Énergie — Rapport technique</title>
+<style>
+  /* ---- Format PDF A4, pensé pour l'impression ---- */
+  @page { size: A4; margin: 18mm 16mm; }
+  :root {
+    --ink: #1a1a1a; --soft: #555; --muted: #888;
+    --accent: #0b6e4f;         /* vert énergie, sobre */
+    --accent-2: #1b5fa8;       /* bleu données */
+    --rule: #d8d8d4; --bg-soft: #f5f5f1; --bg-card: #fafaf8;
+    --font: "Segoe UI", -apple-system, Roboto, Helvetica, Arial, sans-serif;
+    --mono: "Consolas", "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: var(--font); color: var(--ink); line-height: 1.55;
+         font-size: 10.5pt; margin: 0; }
+  h1, h2, h3 { line-height: 1.2; }
+  h1 { font-size: 23pt; color: var(--accent); margin: 0 0 4px; }
+  h2 { font-size: 15pt; color: var(--accent-2); margin: 26px 0 8px;
+       padding-bottom: 4px; border-bottom: 2px solid var(--rule); }
+  h3 { font-size: 11.5pt; color: var(--ink); margin: 16px 0 4px; }
+  p { margin: 6px 0; }
+  code { font-family: var(--mono); font-size: 9.2pt; background: var(--bg-soft);
+         padding: 1px 4px; border-radius: 3px; }
+  a { color: var(--accent-2); text-decoration: none; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.6pt; }
+  th, td { text-align: left; padding: 5px 8px; border: 1px solid var(--rule);
+           vertical-align: top; }
+  th { background: var(--bg-soft); font-weight: 600; }
+  ul, ol { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .lead { font-size: 11pt; color: var(--soft); }
+  .tag { display: inline-block; background: var(--accent); color: #fff;
+         font-size: 8pt; padding: 1px 7px; border-radius: 10px; letter-spacing: .3px; }
+  .card { background: var(--bg-card); border: 1px solid var(--rule);
+          border-radius: 6px; padding: 10px 14px; margin: 10px 0; }
+  .why { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0;
+         color: var(--soft); }
+  .why b { color: var(--ink); }
+  .cover { text-align: left; padding: 10px 0 0; }
+  .cover .sub { font-size: 12pt; color: var(--soft); margin-top: 2px; }
+  .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 18px 0; }
+  .meta-grid .m { background: var(--bg-soft); border-radius: 6px; padding: 10px; }
+  .meta-grid .m b { font-size: 16pt; color: var(--accent-2); display: block; }
+  .meta-grid .m span { font-size: 8.5pt; color: var(--muted); }
+  .toc { background: var(--bg-soft); border-radius: 6px; padding: 12px 18px; margin: 16px 0; font-size: 9.8pt; }
+  .toc ol { columns: 2; }
+  .page-break { page-break-before: always; }
+  .avoid-break { page-break-inside: avoid; }
+  .fig { margin: 12px 0; text-align: center; }
+  .fig figcaption { font-size: 8.5pt; color: var(--muted); margin-top: 4px; }
+  footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid var(--rule);
+           font-size: 8.5pt; color: var(--muted); }
+  .small { font-size: 9pt; color: var(--soft); }
+</style>
+</head>
+<body>
+
+<!-- ====================== COUVERTURE ====================== -->
+<section class="cover">
+  <span class="tag">PROJET DATA · BATCH + TEMPS RÉEL</span>
+  <h1>Plateforme de données d'un distributeur d'électricité</h1>
+  <p class="sub">Compteurs intelligents au Sénégal — ingestion multi-sources, streaming,
+     entrepôt de données et détection de fraude. Rapport technique et pédagogique.</p>
+
+  <div class="meta-grid">
+    <div class="m"><b>7</b><span>bases de données spécialisées</span></div>
+    <div class="m"><b>25</b><span>services conteneurisés (Docker)</span></div>
+    <div class="m"><b>40</b><span>tests automatisés (pytest)</span></div>
+    <div class="m"><b>~2 850</b><span>lignes de Python</span></div>
+    <div class="m"><b>1 000</b><span>compteurs simulés, 60 jours</span></div>
+    <div class="m"><b>1,44 M</b><span>relevés horaires</span></div>
+  </div>
+
+  <p class="lead">Ce rapport explique <b>ce que fait la plateforme</b>, <b>comment elle est
+     construite</b>, et surtout <b>pourquoi chaque choix technique a été fait</b>. Il se lit
+     à deux niveaux : une vue d'ensemble accessible à tous, puis des sections techniques
+     détaillées pour qui veut entrer dans le moteur.</p>
+
+  <div class="toc">
+    <b>Sommaire</b>
+    <ol>
+      <li>Le problème métier</li>
+      <li>Vue d'ensemble en une image</li>
+      <li>Pourquoi 7 bases différentes</li>
+      <li>Les deux flux : batch et temps réel</li>
+      <li>Le parcours d'une donnée</li>
+      <li>L'entrepôt de données (analyse)</li>
+      <li>La détection de fraude (ML)</li>
+      <li>Qualité, tests et choix d'ingénierie</li>
+      <li>Ce qui resterait à faire en production</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ====================== 1. PROBLÈME ====================== -->
+<section class="page-break">
+<h2>1. Le problème métier</h2>
+<p>Un distributeur d'électricité équipe ses clients de <b>compteurs intelligents</b> :
+   des appareils qui mesurent la consommation heure par heure et la transmettent
+   automatiquement. Cela ouvre quatre besoins concrets, qui sont le cahier des charges
+   de la plateforme :</p>
+
+<table class="avoid-break">
+  <tr><th>Besoin métier</th><th>Réponse de la plateforme</th></tr>
+  <tr><td>Suivre la consommation <b>en direct</b></td><td>Relevés via Kafka → cache Redis → Kibana</td></tr>
+  <tr><td>Analyser la consommation par zone et par heure</td><td>Entrepôt de données + Power BI</td></tr>
+  <tr><td>Détecter <b>fraudes et anomalies</b></td><td>Modèle de Machine Learning sur l'historique</td></tr>
+  <tr><td>Comprendre l'<b>impact d'une panne</b> réseau</td><td>Graphe Neo4j : poste → transformateur → compteur</td></tr>
+</table>
+
+<p>Le domaine est un <b>distributeur fictif au Sénégal</b>. Les données sont générées
+   artificiellement mais de façon <b>réaliste</b> : vraies régions (codes ISO, population
+   issue de Wikipédia), vraie météo (API Open-Meteo, car la climatisation fait grimper la
+   consommation), tarification par tranches en francs CFA, et même des <b>défauts de qualité
+   volontaires</b> dans les données clients (emails manquants, doublons) pour que le nettoyage
+   ait un sens.</p>
+
+<div class="why"><b>Pourquoi simuler plutôt qu'utiliser des données réelles ?</b> Les données
+   de consommation électrique sont sensibles et rarement publiques. Un générateur maîtrisé
+   permet aussi d'<b>injecter volontairement des fraudes</b> dont on connaît la vérité — ce qui
+   est indispensable pour entraîner et surtout <b>évaluer</b> un modèle de détection.</div>
+</section>
+
+<!-- ====================== 2. VUE D'ENSEMBLE ====================== -->
+<section class="page-break">
+<h2>2. Vue d'ensemble en une image</h2>
+<p>La plateforme suit un principe simple : <b>une donnée entre, est transformée, puis
+   exploitée</b>. Deux vitesses coexistent — le <b>batch</b> (par gros paquets) et le
+   <b>temps réel</b> (en continu).</p>
+
+<figure class="fig avoid-break">
+<svg viewBox="0 0 760 360" width="100%" style="max-width:720px" font-family="Segoe UI, sans-serif" font-size="11">
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#888"/>
+    </marker>
+    <style>
+      .box{fill:#fafaf8;stroke:#1b5fa8;stroke-width:1.3;rx:6}
+      .boxg{fill:#eef6f2;stroke:#0b6e4f;stroke-width:1.3}
+      .lbl{fill:#1a1a1a;font-size:10px}
+      .ttl{fill:#0b6e4f;font-weight:700;font-size:10px}
+      .flow{stroke:#888;stroke-width:1.3;fill:none;marker-end:url(#a)}
+      .zone{fill:none;stroke:#d8d8d4;stroke-dasharray:4 3}
+    </style>
+  </defs>
+
+  <!-- SOURCES -->
+  <rect class="box" x="10" y="20" width="150" height="86" rx="6"/>
+  <text class="ttl" x="20" y="38">SOURCES</text>
+  <text class="lbl" x="20" y="54">Générateur (Faker)</text>
+  <text class="lbl" x="20" y="69">Scraping Wikipédia</text>
+  <text class="lbl" x="20" y="84">API météo Open-Meteo</text>
+  <text class="lbl" x="20" y="99">7 formats de fichiers</text>
+
+  <!-- BATCH path -->
+  <rect class="box" x="210" y="14" width="140" height="40" rx="6"/>
+  <text class="ttl" x="220" y="30">DATA LAKE</text>
+  <text class="lbl" x="220" y="45">fichiers data/raw</text>
+
+  <rect class="box" x="210" y="70" width="140" height="40" rx="6"/>
+  <text class="ttl" x="220" y="86">6 BASES</text>
+  <text class="lbl" x="220" y="101">chargement (loader)</text>
+
+  <rect class="boxg" x="400" y="42" width="150" height="44" rx="6"/>
+  <text class="ttl" x="410" y="60">ENTREPÔT (DW)</text>
+  <text class="lbl" x="410" y="76">ETL : nettoie + agrège</text>
+
+  <rect class="box" x="600" y="14" width="150" height="40" rx="6"/>
+  <text class="ttl" x="610" y="30">POWER BI</text>
+  <text class="lbl" x="610" y="45">tableaux de bord</text>
+
+  <rect class="boxg" x="600" y="72" width="150" height="40" rx="6"/>
+  <text class="ttl" x="610" y="88">MACHINE LEARNING</text>
+  <text class="lbl" x="610" y="103">détection de fraude</text>
+
+  <!-- TEMPS REEL path -->
+  <rect class="box" x="210" y="210" width="140" height="40" rx="6"/>
+  <text class="ttl" x="220" y="226">KAFKA</text>
+  <text class="lbl" x="220" y="241">bus d'événements</text>
+
+  <rect class="box" x="400" y="170" width="150" height="38" rx="6"/>
+  <text class="ttl" x="410" y="186">CONSUMERS</text>
+  <text class="lbl" x="410" y="200">Redis · MongoDB</text>
+
+  <rect class="box" x="400" y="224" width="150" height="44" rx="6"/>
+  <text class="ttl" x="410" y="242">ELK (monitoring)</text>
+  <text class="lbl" x="410" y="258">Logstash→Elastic→Kibana</text>
+
+  <!-- zones -->
+  <rect class="zone" x="195" y="4" width="565" height="120" rx="6"/>
+  <text x="200" y="-2" fill="#888" font-size="9" transform="translate(0,14)">FLUX BATCH (1×/heure)</text>
+  <rect class="zone" x="195" y="158" width="370" height="120" rx="6"/>
+  <text x="200" y="152" fill="#888" font-size="9" transform="translate(0,14)">FLUX TEMPS RÉEL (3–10 s)</text>
+
+  <!-- flows batch -->
+  <path class="flow" d="M160,55 L208,40"/>
+  <path class="flow" d="M160,75 L208,88"/>
+  <path class="flow" d="M350,40 Q375,45 398,58"/>
+  <path class="flow" d="M350,90 Q375,80 398,70"/>
+  <path class="flow" d="M550,55 L598,40"/>
+  <path class="flow" d="M550,70 L598,88"/>
+  <!-- flows temps réel -->
+  <path class="flow" d="M160,95 Q185,180 230,208"/>
+  <path class="flow" d="M350,225 L398,195"/>
+  <path class="flow" d="M350,235 L398,243"/>
+</svg>
+<figcaption>Architecture générale : les sources alimentent deux flux (batch et temps réel)
+  qui convergent vers l'exploitation (BI et ML).</figcaption>
+</figure>
+</section>
+
+<!-- ====================== 3. 7 BASES ====================== -->
+<section class="page-break">
+<h2>3. Pourquoi 7 bases de données différentes</h2>
+<p>Le réflexe du débutant est de tout mettre dans une seule base (souvent SQL). L'approche
+   « expert » consiste à choisir l'outil selon la <b>forme</b> et l'<b>usage</b> de chaque
+   donnée. C'est le cœur du projet : chaque base est le bon outil pour un besoin précis.</p>
+
+<table>
+  <tr><th>Base</th><th>Contenu</th><th>Pourquoi celle-là</th></tr>
+  <tr><td><b>PostgreSQL</b><br><span class="small">relationnel</span></td>
+      <td>Clients, compteurs, réseau (OLTP) + l'entrepôt de données</td>
+      <td>Données structurées, intégrité garantie par des règles (clés, contraintes)</td></tr>
+  <tr><td><b>MySQL</b><br><span class="small">relationnel</span></td>
+      <td>Facturation : recharges prépayées, factures postpayées</td>
+      <td>Système de facturation séparé — comme en réalité (souvent un logiciel tiers)</td></tr>
+  <tr><td><b>Cassandra</b><br><span class="small">colonnes</span></td>
+      <td>Historique des relevés (1,44 M de lignes)</td>
+      <td>Écriture massive continue ; conçue pour les séries temporelles</td></tr>
+  <tr><td><b>MongoDB</b><br><span class="small">documents</span></td>
+      <td>Inspections terrain, alertes</td>
+      <td>Structure <b>variable</b> : une fraude n'a pas les mêmes champs qu'une panne</td></tr>
+  <tr><td><b>Neo4j</b><br><span class="small">graphe</span></td>
+      <td>Topologie du réseau électrique</td>
+      <td>Répond à « qui dépend de quoi » en suivant les liens, pas en empilant des jointures</td></tr>
+  <tr><td><b>Redis</b><br><span class="small">clé-valeur</span></td>
+      <td>Dernier relevé, consommation live par région</td>
+      <td>Lecture instantanée du « maintenant » (en mémoire vive)</td></tr>
+  <tr><td><b>Elasticsearch</b><br><span class="small">recherche</span></td>
+      <td>Relevés, alertes, logs (via Logstash)</td>
+      <td>Recherche et visualisation du flux (monitoring Kibana)</td></tr>
+</table>
+
+<div class="why"><b>L'idée à retenir.</b> Cassandra et Redis se modélisent <b>à l'envers</b> du
+   SQL : on ne part pas des données mais de <b>la question qu'on posera</b>. Cassandra range
+   les relevés par compteur et par jour, car la question est « les relevés de ce compteur sur
+   cette période ». Elle ne sait pas répondre à « tous les compteurs d'une région » — et c'est
+   <b>normal</b> : cette question d'analyse, c'est le rôle de l'entrepôt.</div>
+</section>
+
+<!-- ====================== 4. BATCH + TEMPS RÉEL ====================== -->
+<section class="page-break">
+<h2>4. Les deux flux : batch et temps réel</h2>
+
+<h3>Le flux batch — par gros paquets</h3>
+<p>Un générateur produit des fichiers dans un <b>data lake</b> (zone de stockage brut,
+   organisée par date comme en Big Data). Ces fichiers imitent 7 systèmes sources réels, en
+   7 formats (CSV, JSON, XML, Excel, YAML…). Un <b>chargeur</b> les répartit ensuite dans les
+   6 bases. C'est lent mais complet : on traite tout l'historique d'un coup.</p>
+
+<h3>Le flux temps réel — en continu</h3>
+<p>Un <b>producteur</b> simule les compteurs qui émettent en continu, et publie chaque relevé
+   sur <b>Kafka</b>, un « tapis roulant » d'événements. Des <b>consumers</b> lisent ce tapis :
+   l'un met à jour le cache Redis (le direct), un autre historise les alertes dans MongoDB, et
+   Logstash indexe tout dans Elasticsearch pour le monitoring.</p>
+
+<div class="card avoid-break"><b>Le point fort du projet : la cohérence entre les deux.</b>
+   Le temps réel réutilise <b>exactement le même modèle physique de consommation</b> que le
+   batch (profils horaires, effet de la température, bruit aléatoire). Un relevé temps réel
+   prolonge donc l'historique sans rupture : mêmes compteurs, même « personnalité » de
+   consommation, index qui continue de monter.</div>
+
+<div class="why"><b>Pourquoi Kafka plutôt qu'écrire direct dans les bases ?</b> Kafka
+   <b>découple</b> : le producteur ignore qui lira. Si un lecteur tombe, les messages
+   l'attendent. Et surtout, <b>plusieurs lecteurs</b> traitent le même flux pour des usages
+   différents (cache, monitoring, alertes) sans se gêner.</div>
+</section>
+
+<!-- ====================== 5. PARCOURS ====================== -->
+<section class="page-break">
+<h2>5. Le parcours d'une donnée (exemple concret)</h2>
+<p>Suivons un relevé du compteur <code>CPT-10000001</code> à 20 h, un soir de forte chaleur :</p>
+<ol>
+  <li><b>Génération</b> : le modèle calcule la consommation = base journalière ÷ 24 × profil
+     du soir (pic résidentiel) × effet climatisation × aléa. Résultat : ~0,54 kWh.</li>
+  <li><b>Temps réel</b> : le producteur publie ce relevé sur le topic Kafka
+     <code>meter-readings</code>, avec le compteur comme clé (garantit l'ordre).</li>
+  <li><b>Cache</b> : le consumer Redis écrit <code>compteur:CPT-10000001:dernier</code> et
+     ajoute la consommation au total live de la région de Dakar.</li>
+  <li><b>Monitoring</b> : Logstash indexe le relevé dans Elasticsearch ; il apparaît dans
+     Kibana, filtrable par région et par heure.</li>
+  <li><b>Batch & analyse</b> : la version historique du même relevé est stockée dans
+     Cassandra, puis l'ETL l'agrège (somme journalière) dans l'entrepôt.</li>
+  <li><b>Détection</b> : si ce compteur se mettait à consommer anormalement peu, le modèle
+     ML le remonterait dans la liste des compteurs à inspecter.</li>
+</ol>
+</section>
+
+<!-- ====================== 6. ENTREPÔT ====================== -->
+<section class="page-break">
+<h2>6. L'entrepôt de données (pour l'analyse)</h2>
+<p>Les bases opérationnelles sont faites pour le <b>quotidien</b> (enregistrer un client, un
+   relevé). Elles sont mauvaises pour l'<b>analyse</b> (« consommation moyenne par région et
+   par mois ») : données éparpillées, non nettoyées, jointures coûteuses. D'où un
+   <b>entrepôt de données</b> séparé : une base unique, propre, et modélisée pour analyser.</p>
+
+<h3>Le schéma en étoile</h3>
+<p>Au centre, les <b>faits</b> (les mesures : la consommation). Autour, les <b>dimensions</b>
+   (les axes d'analyse : le temps, la région, le client, le compteur). Une question d'analyse
+   devient une simple jointure « faits × dimensions », sans cascade de 6 tables.</p>
+<p>Deux niveaux de détail coexistent : les relevés <b>horaires</b> (vérité fine) et un
+   <b>agrégat journalier</b> par-dessus, qui accélère les analyses mensuelles d'un facteur 24.</p>
+
+<h3>L'ETL : là où les défauts sont corrigés</h3>
+<p>Le programme ETL (Extract-Transform-Load) remplit l'entrepôt. Son moment clé est le
+   <b>nettoyage</b> : la source contient 1 010 clients, dont 10 <b>doublons volontaires</b>
+   (même personne réinscrite, nom mis en majuscules).</p>
+
+<div class="why"><b>Un piège évité par l'analyse réelle des données.</b> Il existe 59 groupes
+   de clients « homonymes » (même prénom/nom/région) — mais ce ne sont pas tous des doublons !
+   <code>Adama Ba</code> à Dakar apparaît 3 fois : ce sont de <b>vraies personnes distinctes</b>
+   (noms très courants au Sénégal). La signature fiable d'un vrai doublon est
+   <b>même email ET même date d'inscription</b>. Un nettoyage naïf sur le nom aurait supprimé
+   de vrais clients. Résultat correct : exactement <b>1 000 clients uniques</b>.</div>
+</section>
+
+<!-- ====================== 7. ML ====================== -->
+<section class="page-break">
+<h2>7. La détection de fraude (Machine Learning)</h2>
+<p>Objectif : repérer les compteurs anormaux (fraude ou panne) à partir de leur
+   <b>profil de consommation</b>, pour <b>prioriser les inspections terrain</b> — envoyer les
+   techniciens là où le risque est le plus élevé, sans attendre qu'une panne soit signalée.</p>
+
+<h3>Le fil rouge du projet</h3>
+<p>Le générateur <b>injecte</b> trois types d'anomalies dans les relevés ; les
+   <b>inspections</b> terrain (MongoDB) en étiquettent une partie (comme en vrai : toutes ne
+   sont pas contrôlées). On a donc de quoi faire un <b>apprentissage supervisé</b> : des
+   profils de consommation (les indices) + des étiquettes (anomalie ou non).</p>
+
+<table class="avoid-break">
+  <tr><th>Anomalie injectée</th><th>Signature dans les données</th><th>Indice qui la révèle</th></tr>
+  <tr><td>Fraude par dérivation (bypass)</td><td>consommation qui chute brutalement</td><td>ratio 2ᵉ moitié / 1ʳᵉ moitié bas</td></tr>
+  <tr><td>Fraude intermittente</td><td>zéros la nuit (compteur shunté)</td><td>part d'heures à zéro la nuit</td></tr>
+  <tr><td>Compteur bloqué</td><td>consommation nulle en continu</td><td>part d'heures à zéro</td></tr>
+</table>
+
+<h3>Deux précautions d'expert</h3>
+<ul>
+  <li><b>Pas de fuite de données.</b> Les indices décrivent la <b>consommation</b>, jamais le
+     fait d'avoir été inspecté. Les inspections servent uniquement d'étiquettes. Sinon le
+     modèle « tricherait ».</li>
+  <li><b>Jamais le taux de bonnes réponses (accuracy).</b> Avec seulement ~4 % d'anomalies,
+     un modèle qui dirait « tout va bien » aurait 96 % de réussite… et serait inutile. On mesure
+     donc le <b>rappel</b> (ne pas rater d'anomalie) et la <b>précision</b> (ne pas déranger un
+     technicien pour rien).</li>
+</ul>
+
+<div class="why"><b>Honnêteté sur les résultats.</b> Sur ce jeu de données, le modèle atteint
+   des scores quasi parfaits. Ce n'est <b>pas</b> représentatif du réel : les anomalies sont
+   injectées de façon très marquée, donc faciles à séparer. Le projet démontre la <b>chaîne
+   complète et correcte</b> (indices sans fuite, évaluation adaptée, classement actionnable) ;
+   en production, les fraudes seraient plus subtiles et les scores plus bas.</div>
+</section>
+
+<!-- ====================== 8. QUALITÉ ====================== -->
+<section class="page-break">
+<h2>8. Qualité, tests et choix d'ingénierie</h2>
+
+<h3>Tests automatisés</h3>
+<p><b>40 tests</b> couvrent la logique métier. Un principe a guidé tout le code : <b>séparer la
+   logique du transport</b>. Les transformations (nettoyage, agrégation, features ML) sont des
+   fonctions pures, testables <b>sans aucune base ni réseau</b>. Les connexions aux bases sont
+   isolées à part. Résultat : on valide le cœur du système en quelques secondes, sans Docker.</p>
+
+<h3>Infrastructure reproductible</h3>
+<ul>
+  <li><b>25 services Docker</b> organisés en <b>profils</b> (socle, batch, temps réel, ML,
+     Airflow) : on ne démarre que ce dont on a besoin.</li>
+  <li><b>Un pilote unique</b> (<code>make</code> / <code>platform.ps1</code>) encapsule les
+     scénarios ; un <b>smoke test</b> vérifie que chaque base répond.</li>
+  <li><b>Airflow</b> orchestre le batch : les tâches lancent les conteneurs existants
+     (le code métier n'est pas dupliqué dans l'orchestrateur).</li>
+  <li>Détails anticipés : fins de ligne figées (évite un bug Windows/Linux classique),
+     versions d'images épinglées, secrets hors du code (fichier <code>.env</code>).</li>
+</ul>
+
+<h3>Décisions documentées (extraits)</h3>
+<div class="card avoid-break">
+  <p class="small" style="margin:0"><b>Un client = un compteur</b>, garanti par une contrainte
+  d'unicité en base. · <b>Clés étrangères inter-bases interdites</b> (MySQL ne peut pas
+  référencer PostgreSQL) : la cohérence est vérifiée par l'ETL. · <b>Logs en JSON</b> partout,
+  prêts pour Kibana dès le départ. · <b>Idempotence</b> des chargements (relançables sans
+  créer de doublons).</p>
+</div>
+</section>
+
+<!-- ====================== 9. PRODUCTION ====================== -->
+<section>
+<h2>9. Ce qui resterait à faire en production</h2>
+<p>Ce projet est pédagogique et local. Pour une mise en production, les écarts assumés
+   seraient à combler :</p>
+<ul>
+  <li><b>Sécurité</b> : Elasticsearch tourne ici sans authentification (choix de dev) ;
+     il faudrait mots de passe, TLS, et des secrets gérés par un coffre.</li>
+  <li><b>Haute disponibilité</b> : chaque base est en un seul nœud ; en production, réplication
+     (Cassandra RF≥3, cluster Kafka multi-broker, Elasticsearch multi-nœuds).</li>
+  <li><b>ETL incrémental</b> : aujourd'hui l'entrepôt est reconstruit entièrement à chaque fois
+     (« full refresh ») ; en production on ne traiterait que les nouvelles données.</li>
+  <li><b>Modèle ML</b> : réentraînement périodique, suivi de la dérive, et un seuil de décision
+     calibré sur le coût réel d'une inspection ratée vs inutile.</li>
+  <li><b>Orchestration Docker</b> : le socket Docker donné à Airflow convient en local, pas en
+     production (préférer un exécuteur Kubernetes).</li>
+</ul>
+
+<p class="lead">En l'état, la plateforme couvre <b>la chaîne complète</b> : de la génération des
+   données à leur exploitation analytique et prédictive, en passant par le stockage spécialisé,
+   le temps réel et le monitoring — le tout reproductible en quelques commandes.</p>
+
+<footer>
+  Rapport technique — Plateforme de données Énergie (compteurs intelligents).
+  Projet pédagogique, données fictives. Document à deux niveaux de lecture
+  (vue d'ensemble + sections techniques). Généré le 26 octobre 2026.
+</footer>
+</section>
+
+</body>
+</html>
