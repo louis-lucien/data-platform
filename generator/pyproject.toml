@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "energy-generator"
+version = "0.1.0"
+description = "Générateur de données (batch & streaming) de la plateforme énergie"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "faker>=30",
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Producteur de flux temps réel (étape 5). Optionnel : le batch n'en a pas besoin,
+# et le producteur tourne en --dry-run sans ce paquet (voir generator/streaming).
+streaming = ["kafka-python>=2.0"]
+
+[project.scripts]
+generate-batch = "generator.batch:main"
+stream-readings = "generator.streaming.producer:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

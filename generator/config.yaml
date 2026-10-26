@@ -1,0 +1,60 @@
+# Paramètres du générateur batch.
+# Tout ce qui peut varier se règle ici, jamais en dur dans le code.
+
+seed: 42                      # même graine = mêmes données (reproductibilité)
+clients: 1000                 # nombre de clients / compteurs
+history_days: 60              # profondeur de l'historique horaire (max 90 : limite Open-Meteo)
+
+reseau:
+  clients_par_transformateur: 25
+  habitants_par_poste_source: 1500000
+
+# Répartition des types de clients (pas d'agricole à Dakar : zone urbaine)
+types_clients:
+  residentiel: 0.80
+  professionnel: 0.12
+  agricole: 0.08
+
+# Part de compteurs prépayés selon le type de client (le reste est postpayé)
+part_prepaye:
+  residentiel: 0.85
+  professionnel: 0.50
+  agricole: 0.60
+
+# Anomalies injectées volontairement : elles serviront de vérité terrain au modèle ML
+anomalies:
+  fraude_bypass: 0.02          # dérivation : la consommation mesurée chute brutalement
+  fraude_intermittente: 0.01   # compteur shunté la nuit
+  compteur_bloque: 0.01        # panne : l'index ne bouge plus
+
+# Inspections terrain : part des compteurs visités par les techniciens
+inspections:
+  taux_detection_anomalies: 0.80   # une anomalie n'est pas toujours inspectée
+  taux_controle_aleatoire: 0.10    # contrôles de routine sur compteurs normaux
+
+# Défauts de qualité injectés dans les données clients (à nettoyer par l'ETL)
+qualite:
+  email_manquant: 0.05
+  telephone_mal_formate: 0.05
+  nom_en_majuscules: 0.03
+  doublons_clients: 0.01
+
+# Grille tarifaire FICTIVE (FCFA HT par kWh), inspirée d'une tarification par tranches
+tarifs:
+  devise: XOF
+  tva: 0.18
+  residentiel:
+    - {jusqu_a_kwh: 150, prix_kwh: 91}
+    - {jusqu_a_kwh: 250, prix_kwh: 136}
+    - {jusqu_a_kwh: null, prix_kwh: 149}
+  professionnel:
+    - {jusqu_a_kwh: null, prix_kwh: 158}
+  agricole:
+    - {jusqu_a_kwh: null, prix_kwh: 104}
+
+sources:
+  wikipedia_url: https://fr.wikipedia.org/wiki/R%C3%A9gions_du_S%C3%A9n%C3%A9gal
+  open_meteo_url: https://api.open-meteo.com/v1/forecast
+  user_agent: data-platform-energie/0.1 (projet pedagogique)
+  cache_ttl_heures: 168          # on ne re-scrape pas Wikipédia plus d'une fois par semaine
+  timeout_secondes: 15

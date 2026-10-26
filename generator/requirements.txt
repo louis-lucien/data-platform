@@ -1,0 +1,8 @@
+# Versions figées pour des builds Docker reproductibles
+pandas==3.1.0
+numpy==2.5.4
+faker==40.43.0
+openpyxl==3.1.5
+pyyaml==6.0.3
+requests==2.34.2
+beautifulsoup4==4.15.0
