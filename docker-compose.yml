@@ -1,0 +1,673 @@
+# =============================================================================
+#  Plateforme de données Énergie — Infrastructure (étape 4)
+# =============================================================================
+#  Ce fichier décrit les CONTENEURS qui hébergent les bases de données.
+#  On le construit base par base. Pour l'instant : le socle relationnel
+#  (PostgreSQL + MySQL). Les bases NoSQL (Cassandra, MongoDB, Neo4j, Redis)
+#  et la stack Kafka/ELK seront ajoutées aux étapes suivantes.
+#
+#  Lancement :   docker compose up -d
+#  Arrêt :       docker compose down          (garde les données)
+#  Remise à zéro : docker compose down -v      (SUPPRIME les volumes = les données)
+#
+#  Les mots de passe et noms de bases viennent du fichier .env (voir .env.example).
+#  Docker Compose lit .env automatiquement dans le même dossier.
+#
+#  Bases couvertes à ce stade (étapes 3/4) :
+#    postgres  : OLTP relationnel          (auto-init via /docker-entrypoint-initdb.d)
+#    mysql     : facturation               (auto-init via /docker-entrypoint-initdb.d)
+#    cassandra : historique des relevés    (init manuelle via cqlsh, voir note *)
+#    mongo     : inspections / alertes      (auto-init via /docker-entrypoint-initdb.d)
+#    neo4j     : topologie réseau (graphe)  (init manuelle via cypher-shell, voir note *)
+#    redis     : cache temps réel           (pas d'init : conventions dans sql/init/redis/)
+#
+#  (*) Cassandra et Neo4j n'ont pas de dossier d'auto-init comme Postgres/Mongo.
+#      Leurs scripts sont montés en lecture seule dans le conteneur ; on les
+#      jouera une fois la base prête, par ex. :
+#        docker compose exec -T cassandra cqlsh -f /init/01_keyspace_releves.cql
+#        docker compose exec -T neo4j cypher-shell -u neo4j -p <mdp> -f /init/01_contraintes_topologie.cypher
+#      (un script d'orchestration automatisera ça à l'étape 4 finale.)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  #  PostgreSQL — sources opérationnelles (OLTP) + futur Data Warehouse
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16            # version figée : builds reproductibles
+    container_name: energy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}          # base créée au premier démarrage
+    ports:
+      - "5432:5432"               # accessible depuis l'hôte (DBeaver, psql...)
+    volumes:
+      # Persistance des données dans un volume Docker nommé (voir plus bas).
+      - postgres_data:/var/lib/postgresql/data
+      # Scripts d'init joués UNE FOIS, au tout premier démarrage (base vide),
+      # dans l'ordre alphabétique. Montés en lecture seule (:ro) par sécurité.
+      - ./sql/init/postgres:/docker-entrypoint-initdb.d:ro
+      - ./sql/init/warehouse:/warehouse-sql:ro       # schéma DW (appliqué par 02_...)
+    healthcheck:
+      # « La base est-elle prête à accepter des connexions ? »
+      # Les services qui en dépendent attendront ce signal (depends_on).
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  #  MySQL — système de facturation (recharges + factures)
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: energy-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}     # base créée au premier démarrage
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  #  Cassandra — historique des relevés (séries temporelles, écriture massive)
+  # ---------------------------------------------------------------------------
+  cassandra:
+    image: cassandra:5.0
+    container_name: energy-cassandra
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: energy-cluster
+      # Mono-nœud en dev : on limite la mémoire pour ne pas étouffer la machine.
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    ports:
+      - "9042:9042"               # port CQL natif
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      # Monté en lecture seule ; joué manuellement via cqlsh (voir note * en tête).
+      - ./sql/init/cassandra:/init:ro
+    healthcheck:
+      # Cassandra est longue à démarrer : on vérifie qu'elle répond au CQL.
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s           # laisse le temps au premier boot
+
+  # ---------------------------------------------------------------------------
+  #  MongoDB — inspections terrain + alertes brutes (documents schéma variable)
+  # ---------------------------------------------------------------------------
+  mongo:
+    image: mongo:7.0
+    container_name: energy-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      # Les .js de ce dossier sont joués au PREMIER démarrage (base vide).
+      - ./sql/init/mongo:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  #  Neo4j — topologie du réseau électrique (graphe)
+  # ---------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5
+    container_name: energy-neo4j
+    restart: unless-stopped
+    environment:
+      # Format imposé par l'image : "utilisateur/motdepasse" (voir .env.example).
+      NEO4J_AUTH: ${NEO4J_AUTH}
+    ports:
+      - "7474:7474"               # interface web Neo4j Browser
+      - "7687:7687"               # protocole Bolt (drivers, cypher-shell)
+    volumes:
+      - neo4j_data:/data
+      # Monté en lecture seule ; joué manuellement via cypher-shell (voir note *).
+      - ./sql/init/neo4j:/init:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  #  Redis — cache temps réel (dernier relevé, conso live par région)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine        # alpine = image minuscule, idéal pour un cache
+    container_name: energy-redis
+    restart: unless-stopped
+    # appendonly : journalise les écritures pour survivre à un redémarrage.
+    # (Pour un pur cache on pourrait s'en passer ; ici on garde la conso live.)
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  #  Kafka — bus d'événements temps réel (relevés + alertes)
+  # ---------------------------------------------------------------------------
+  #  Mode KRaft (sans Zookeeper) : Kafka gère lui-même ses métadonnées depuis la
+  #  version 3.3+. Un seul nœud qui cumule les rôles broker ET controller, ce qui
+  #  suffit en développement (en production on sépare et on réplique).
+  #
+  #  DEUX listeners, c'est le point délicat :
+  #    - PLAINTEXT (kafka:9092)      : pour les clients DANS le réseau Docker
+  #      (les consumers, le producteur conteneurisé).
+  #    - PLAINTEXT_HOST (localhost:9092) : pour un client sur VOTRE machine
+  #      (le producteur lancé à la main hors Docker).
+  #  Un client doit toujours pouvoir re-joindre l'adresse ANNONCÉE : d'où les deux.
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: energy-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:29092"              # hôte:9092 -> conteneur:29092 (listener PLAINTEXT_HOST)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Un seul nœud : tout est répliqué 1 fois (impossible de faire plus).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # Le broker répond-il à une commande d'admin ? (topics listables = prêt)
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  #  kafka-setup — conteneur JETABLE : crée les topics, puis s'arrête
+  # ---------------------------------------------------------------------------
+  #  Kafka peut créer les topics tout seul à la première écriture, mais sans
+  #  contrôle du nombre de partitions. On les crée donc explicitement. On réutilise
+  #  l'image Kafka (elle contient kafka-topics.sh), d'où aucun build.
+  #  2 partitions par topic : un début de parallélisme pour les consumers, tout en
+  #  gardant l'ordre PAR COMPTEUR (la clé = compteur_id décide de la partition).
+  kafka-setup:
+    image: apache/kafka:3.9.0
+    container_name: energy-kafka-setup
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_TOPIC_READINGS: ${KAFKA_TOPIC_READINGS}
+      KAFKA_TOPIC_ALERTS: ${KAFKA_TOPIC_ALERTS}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        TOPICS=/opt/kafka/bin/kafka-topics.sh
+        $$TOPICS --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic "$${KAFKA_TOPIC_READINGS}" --partitions 2 --replication-factor 1
+        $$TOPICS --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic "$${KAFKA_TOPIC_ALERTS}" --partitions 2 --replication-factor 1
+        echo "Topics crees :"
+        $$TOPICS --bootstrap-server kafka:9092 --list
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  Elasticsearch — moteur de recherche/indexation (stockage du monitoring)
+  # ---------------------------------------------------------------------------
+  #  Single-node, SANS sécurité : choix de DÉVELOPPEMENT (xpack.security=false).
+  #  En production : activer la sécurité (mots de passe, TLS) et plusieurs nœuds.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: energy-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node          # pas de cluster : un seul nœud
+      - xpack.security.enabled=false         # dev uniquement (voir note ci-dessus)
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g           # borne la RAM de la JVM (1 Go)
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }        # autorise le verrouillage mémoire
+    mem_limit: 2g
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      # L'API répond-elle ? (statut du cluster au moins "yellow")
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"\\(green\\|yellow\\)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  #  Logstash — lit Kafka et indexe dans Elasticsearch (le tapis d'entrée d'ELK)
+  # ---------------------------------------------------------------------------
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.15.3
+    container_name: energy-logstash
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      LS_JAVA_OPTS: "-Xms512m -Xmx512m"
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+      kafka:         { condition: service_healthy }
+      kafka-setup:   { condition: service_completed_successfully }
+    volumes:
+      # Le dossier pipeline/ : Logstash joue tous les .conf qu'il contient.
+      - ./config/logstash/pipeline:/usr/share/logstash/pipeline:ro
+
+  # ---------------------------------------------------------------------------
+  #  Kibana — exploration et tableaux de bord (la salle de lecture d'ELK)
+  # ---------------------------------------------------------------------------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: energy-kibana
+    restart: unless-stopped
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"                          # interface web : http://localhost:5601
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q available"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  #  kibana-setup — conteneur JETABLE : crée les data views Kibana, puis s'arrête
+  # ---------------------------------------------------------------------------
+  #  Image curl minuscule : juste de quoi appeler l'API Kibana. Le script est
+  #  monté en volume. Attend que Kibana soit sain avant d'agir.
+  kibana-setup:
+    image: curlimages/curl:8.11.0
+    container_name: energy-kibana-setup
+    depends_on:
+      kibana: { condition: service_healthy }
+    environment:
+      KIBANA_URL: http://kibana:5601
+    volumes:
+      - ./config/kibana/setup.sh:/setup.sh:ro
+    entrypoint: ["sh", "/setup.sh"]
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  Airflow — orchestration des traitements batch (profil "airflow")
+  # ---------------------------------------------------------------------------
+  #  Architecture MINIMALE (dev) : LocalExecutor (pas de Celery/Redis), une base
+  #  de métadonnées DÉDIÉE (airflow-postgres, distincte du Postgres métier), un
+  #  webserver (UI) et un scheduler. Le profil "airflow" évite de démarrer ces
+  #  conteneurs lourds quand on ne s'en sert pas.
+  airflow-postgres:
+    image: postgres:16
+    container_name: energy-airflow-postgres
+    profiles: ["airflow"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # airflow-init : migrations de la base + création de l'utilisateur admin, PUIS
+  # s'arrête. À lancer une fois avant le reste (docker compose ... up airflow-init).
+  airflow-init:
+    build: { context: ./airflow }
+    image: energy-airflow:latest           # construit une fois, réutilisé par webserver/scheduler
+    container_name: energy-airflow-init
+    profiles: ["airflow"]
+    depends_on:
+      airflow-postgres: { condition: service_healthy }
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      # Transmis au DAG pour le DockerOperator (chemin hôte + réseau du projet).
+      HOST_DATA_RAW: ${HOST_DATA_RAW:-./data/raw}
+      COMPOSE_PROJECT_NETWORK: ${COMPOSE_PROJECT_NETWORK:-data-platform_default}
+      # Secrets des bases, relayés aux conteneurs de tâches par le DAG.
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DW_DB: ${DW_DB}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      NEO4J_AUTH: ${NEO4J_AUTH}
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create --username admin --password admin \
+          --firstname Admin --lastname User --role Admin --email admin@example.com || true
+    restart: "no"
+
+  airflow-webserver:
+    build: { context: ./airflow }
+    image: energy-airflow:latest
+    container_name: energy-airflow-webserver
+    profiles: ["airflow"]
+    depends_on:
+      airflow-postgres: { condition: service_healthy }
+    environment: *airflow-env
+    user: "50000:0"                          # user airflow + groupe root (accès socket)
+    command: webserver
+    ports:
+      - "8080:8080"                          # UI : http://localhost:8080 (admin/admin)
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock   # pilote le démon Docker (DockerOperator)
+    restart: unless-stopped
+
+  airflow-scheduler:
+    build: { context: ./airflow }
+    image: energy-airflow:latest
+    container_name: energy-airflow-scheduler
+    profiles: ["airflow"]
+    depends_on:
+      airflow-postgres: { condition: service_healthy }
+    environment: *airflow-env
+    user: "50000:0"
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  #  init — conteneur JETABLE : initialise Cassandra et Neo4j, puis s'arrête
+  # ---------------------------------------------------------------------------
+  #  Postgres/MySQL/Mongo s'auto-initialisent ; Cassandra et Neo4j non. Ce
+  #  service attend qu'elles soient SAINES (condition: service_healthy, rendu
+  #  possible par leurs healthchecks), joue leurs scripts, puis s'arrête.
+  #  Grâce à lui, `docker compose up` initialise TOUT, sans commande manuelle.
+  init:
+    build:
+      context: ./scripts/init         # contient le Dockerfile (cqlsh + cypher-shell)
+    image: energy-init:latest
+    container_name: energy-init
+    depends_on:
+      cassandra:
+        condition: service_healthy    # n'agit qu'une fois Cassandra prête
+      neo4j:
+        condition: service_healthy    # ... et Neo4j prête
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}        # pour extraire user/mot de passe côté script
+    volumes:
+      - ./scripts/init:/scripts:ro     # le script run_init.sh
+      - ./sql/init/cassandra:/init/cassandra:ro
+      - ./sql/init/neo4j:/init/neo4j:ro
+    restart: "no"                      # one-shot : on ne le relance pas en boucle
+
+  # ---------------------------------------------------------------------------
+  #  loader — conteneur JETABLE : charge data/raw dans les 6 bases, puis s'arrête
+  # ---------------------------------------------------------------------------
+  #  Démarre une fois que TOUTES les bases sont saines ET que `init` a fini
+  #  d'appliquer les schémas Cassandra/Neo4j (sinon on écrirait dans des bases
+  #  sans tables). profiles: ne le lance qu'à la demande (voir note ci-dessous).
+  loader:
+    build:
+      context: ./loader
+    image: energy-loader:latest        # tag explicite : réutilisé par le DAG Airflow
+    container_name: energy-loader
+    profiles: ["load"]                 # lancé via : docker compose --profile load up loader
+    depends_on:
+      postgres:   { condition: service_healthy }
+      mysql:      { condition: service_healthy }
+      mongo:      { condition: service_healthy }
+      redis:      { condition: service_healthy }
+      cassandra:  { condition: service_healthy }
+      neo4j:      { condition: service_healthy }
+      init:       { condition: service_completed_successfully }  # schémas Cassandra/Neo4j prêts
+    environment:
+      # Noms de service = noms d'hôte dans le réseau Docker (pas localhost ici).
+      DATA_ROOT: /data/raw
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      CASSANDRA_HOST: cassandra
+      MONGO_HOST: mongo
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      REDIS_HOST: redis
+    volumes:
+      - ./data/raw:/data/raw:ro        # le data lake, en lecture seule
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  etl — conteneur JETABLE : sources -> Data Warehouse (profil "load")
+  # ---------------------------------------------------------------------------
+  #  Lit OLTP (Postgres) + relevés (Cassandra), nettoie/agrège, écrit le
+  #  warehouse. Dépend du loader (les sources doivent être remplies d'abord).
+  etl:
+    build:
+      context: ./etl
+    image: energy-etl:latest           # tag explicite : réutilisé par le DAG Airflow
+    container_name: energy-etl
+    profiles: ["load"]
+    depends_on:
+      postgres:   { condition: service_healthy }
+      cassandra:  { condition: service_healthy }
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DW_DB: ${DW_DB}
+      CASSANDRA_HOST: cassandra
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  ml-train — entraîne le détecteur d'anomalies (profil "ml")
+  # ---------------------------------------------------------------------------
+  #  Lit les features (DW Postgres) + étiquettes (inspections Mongo), entraîne,
+  #  évalue, sauvegarde le modèle dans ./ml/models (monté en volume). Jetable.
+  #  À lancer APRÈS l'ETL (le DW doit contenir les relevés).
+  ml-train:
+    build: { context: ./ml }
+    image: energy-ml:latest
+    container_name: energy-ml-train
+    profiles: ["ml"]
+    command: ["ml.train"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      mongo:    { condition: service_healthy }
+    environment:
+      POSTGRES_HOST: postgres
+      DW_DB: ${DW_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MONGO_HOST: mongo
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - ./ml/models:/app/models       # le modèle entraîné persiste ici
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  ml-score — applique le modèle à tout le parc (profil "ml")
+  # ---------------------------------------------------------------------------
+  ml-score:
+    build: { context: ./ml }
+    image: energy-ml:latest
+    container_name: energy-ml-score
+    profiles: ["ml"]
+    command: ["ml.score"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      POSTGRES_HOST: postgres
+      DW_DB: ${DW_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./ml/models:/app/models       # lit le modèle entraîné
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  bi-init — crée les vues BI dans le warehouse, puis s'arrête (profil "load")
+  # ---------------------------------------------------------------------------
+  #  Les vues (CREATE VIEW) sont la couche sémantique pour Power BI. À jouer
+  #  après l'ETL (les tables dim_/fait_ doivent exister). Réutilise l'image
+  #  Postgres (elle contient psql), aucun build.
+  bi-init:
+    image: postgres:16
+    container_name: energy-bi-init
+    profiles: ["load"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./bi/sql:/bi:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - psql -h postgres -U ${POSTGRES_USER} -d ${DW_DB} -f /bi/vues_bi.sql
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  #  producer — producteur temps réel : émet relevés + alertes sur Kafka
+  # ---------------------------------------------------------------------------
+  #  profiles: lancé à la demande (docker compose --profile stream up producer),
+  #  car c'est un processus LONG (il tourne tant qu'on ne l'arrête pas), pas une
+  #  étape ponctuelle. Attend que Kafka et ses topics soient prêts.
+  producer:
+    build:
+      context: ./generator
+    image: energy-generator:latest
+    container_name: energy-producer
+    profiles: ["stream"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully   # topics créés
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092            # adresse réseau Docker
+      KAFKA_TOPIC_READINGS: ${KAFKA_TOPIC_READINGS}
+      KAFKA_TOPIC_ALERTS: ${KAFKA_TOPIC_ALERTS}
+      STREAM_MIN_INTERVAL: ${STREAM_MIN_INTERVAL}
+      STREAM_MAX_INTERVAL: ${STREAM_MAX_INTERVAL}
+    command: ["--data-root", "/data/raw", "--bootstrap", "kafka:9092"]
+    volumes:
+      - ./data/raw:/data/raw:ro
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  #  consumer-redis — meter-readings -> Redis (cache temps réel)
+  # ---------------------------------------------------------------------------
+  consumer-redis:
+    build:
+      context: ./consumers
+    image: energy-consumers:latest
+    container_name: energy-consumer-redis
+    profiles: ["stream"]
+    command: ["python", "-m", "consumers.redis_consumer"]
+    depends_on:
+      kafka:        { condition: service_healthy }
+      kafka-setup:  { condition: service_completed_successfully }
+      redis:        { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  #  consumer-mongo — meter-alerts -> MongoDB (historique des alertes)
+  # ---------------------------------------------------------------------------
+  consumer-mongo:
+    build:
+      context: ./consumers
+    image: energy-consumers:latest       # même image que consumer-redis (code partagé)
+    container_name: energy-consumer-mongo
+    profiles: ["stream"]
+    command: ["python", "-m", "consumers.mongo_consumer"]
+    depends_on:
+      kafka:        { condition: service_healthy }
+      kafka-setup:  { condition: service_completed_successfully }
+      mongo:        { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MONGO_HOST: mongo
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+    restart: unless-stopped
+
+# -----------------------------------------------------------------------------
+#  Volumes nommés : Docker gère leur emplacement. Les données survivent à un
+#  `docker compose down` (mais pas à `down -v`).
+#
+#  IMPORTANT (environnement de ce projet) : C: est plein, le stockage doit aller
+#  sur D:. Ce n'est PAS réglé ici mais au niveau de Docker Desktop :
+#  Settings > Resources > Advanced > "Disk image location" -> D:\docker-data
+#  Tous les volumes ci-dessous vivront alors sur D:. (Voir README / étape 4.)
+# -----------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  mysql_data:
+  cassandra_data:
+  mongo_data:
+  neo4j_data:
+  redis_data:
+  kafka_data:
+  elasticsearch_data:
+  airflow_db:
