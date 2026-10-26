@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "energy-etl"
+version = "0.1.0"
+description = "ETL : sources opérationnelles -> Data Warehouse (schéma en étoile)"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "psycopg[binary]>=3.1",         # PostgreSQL (OLTP source + warehouse cible)
+    "cassandra-driver>=3.29",       # relevés (source des faits de consommation)
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+run-etl = "etl.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
