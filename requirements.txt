@@ -1,0 +1,44 @@
+# =============================================================================
+#  Dépendances Python de toute la plateforme (agrégées des 5 paquets)
+# =============================================================================
+#  Point d'entrée unique pour installer de quoi faire tourner et tester TOUT le
+#  code Python du projet, hors Docker :
+#
+#      python -m venv .venv
+#      .venv/Scripts/activate        # Linux/Mac : source .venv/bin/activate
+#      pip install -r requirements.txt
+#
+#  Chaque paquet (generator/, loader/, consumers/, etl/, ml/) déclare aussi ses
+#  propres dépendances dans son pyproject.toml ; ce fichier les réunit pour une
+#  installation globale. Les versions figées pour Docker sont dans
+#  generator/requirements.txt.
+# =============================================================================
+
+# --- Données & calcul (generator, loader, etl, ml) ---------------------------
+pandas>=2.2
+numpy>=1.26
+
+# --- Génération de données (generator) ---------------------------------------
+faker>=30                 # clients, compteurs, inspections fictifs
+openpyxl>=3.1             # écriture/lecture du classeur de facturation (Excel)
+pyyaml>=6.0              # config + export de la grille tarifaire
+requests>=2.31           # appels API (météo Open-Meteo)
+beautifulsoup4>=4.12      # scraping des régions (Wikipédia)
+
+# --- Pilotes des bases (loader, etl) -----------------------------------------
+psycopg[binary]>=3.1      # PostgreSQL (OLTP + Data Warehouse)
+PyMySQL>=1.1              # MySQL (facturation)
+cassandra-driver>=3.29    # Cassandra (relevés)
+pymongo>=4.6              # MongoDB (inspections, alertes)
+neo4j>=5.14               # Neo4j (topologie réseau)
+redis>=5.0               # Redis (cache temps réel)
+
+# --- Temps réel (generator[streaming], consumers) ----------------------------
+kafka-python>=2.0         # producteur et consumers Kafka
+
+# --- Machine Learning (ml) ---------------------------------------------------
+scikit-learn>=1.4         # modèle de détection d'anomalies
+joblib>=1.3              # sauvegarde/chargement du modèle entraîné
+
+# --- Tests (tous les paquets) ------------------------------------------------
+pytest>=8

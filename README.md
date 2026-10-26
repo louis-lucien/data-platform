@@ -71,11 +71,16 @@ Guides : [exploitation complète](docs/exploitation-complete.md) ·
 [démarrage](docs/demarrage.md) ·
 [installation Docker si C: saturé](docs/installation-docker.md).
 
-### Générateur batch (sans Docker)
+### Installation Python (tout le projet, sans Docker)
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # Linux/Mac : source .venv/bin/activate
-pip install -e "generator[dev]"
+pip install -r requirements.txt                     # toutes les dépendances des 5 paquets
+```
+
+### Générateur batch (sans Docker)
+
+```bash
 python -m generator.batch --out data/raw            # 1 000 clients, 60 jours d'historique
 python -m generator.batch --clients 100 --days 5 --offline   # test rapide sans réseau
 pytest generator                                     # tests automatisés
